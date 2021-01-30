@@ -36,6 +36,7 @@ func runCode(code string) (*Output, error) {
 	}
 
 	cmd := exec.Command(exePath)
+	cmd.Env = []string{"TOKEN=nice try bud"}
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
