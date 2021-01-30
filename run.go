@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"math/rand"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"sync"
 )
@@ -17,18 +18,24 @@ type Output struct {
 
 func runCode(code string) (*Output, error) {
 	id := strconv.FormatInt(rand.Int63(), 36)
+
 	err := ioutil.WriteFile("./tmp/"+id+".go", []byte(code), 0777)
 	if err != nil {
 		return nil, err
 	}
 
-	buildCmd := exec.Command("go", "build", "-o", "./tmp/"+id+".exe", "./tmp/"+id+".go")
+	exePath := "./tmp/" + id
+	if runtime.GOOS == "windows" {
+		exePath += ".exe"
+	}
+
+	buildCmd := exec.Command("go", "build", "-o", exePath, "./tmp/"+id+".go")
 	_, err = buildCmd.Output()
 	if err != nil {
 		return nil, err
 	}
 
-	cmd := exec.Command("./tmp/" + id + ".exe")
+	cmd := exec.Command(exePath)
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
