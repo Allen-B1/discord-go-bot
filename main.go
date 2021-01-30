@@ -215,8 +215,14 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 		texts[item[0]] += item[1]
 	}
 
-	texts["stdout"] = strings.Replace(texts["stdout"], "```", "`\u200b`\u200b`", -1)
-	texts["stderr"] = strings.Replace(texts["stderr"], "```", "`\u200b`\u200b`", -1)
+	ellipses := make(map[string]string)
+	for key, _ := range texts {
+		texts[key] = strings.Replace(texts[key], "```", "`\u200b`\u200b`", -1)
+		if len(texts[key]) > 1000 {
+			texts[key] = texts[key][:1000]
+			ellipses[key] = "*truncated*"
+		}
+	}
 
 	color := 0xDF9F1F
 	if o.code == 0 {
@@ -225,10 +231,10 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 
 	fields := []*discordgo.MessageEmbedField{}
 	if texts["stdout"] != "" {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: "Stdout", Value: "```\n" + texts["stdout"] + "```", Inline: false})
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "Stdout", Value: "```\n" + texts["stdout"] + "```" + ellipses["stdout"], Inline: false})
 	}
 	if texts["stderr"] != "" {
-		fields = append(fields, &discordgo.MessageEmbedField{Name: "Stderr", Value: "```\n" + texts["stderr"] + "```", Inline: texts["stdout"] != ""})
+		fields = append(fields, &discordgo.MessageEmbedField{Name: "Stderr", Value: "```\n" + texts["stderr"] + "```" + ellipses["stderr"], Inline: texts["stdout"] != ""})
 	}
 
 	if o.code != 0 || (texts["stderr"] == "" && texts["stdout"] == "") {
