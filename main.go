@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 )
+
+var logger *log.Logger
 
 var packages = [][3]string{
 	{"archive/tar", "NewReader"},
@@ -71,7 +74,7 @@ var packages = [][3]string{
 
 var TOKEN = os.Getenv("TOKEN")
 
-func parseMessage(msg string) string {
+func parseMessage(msg string) (string, string) {
 	type_ := 3
 	i := strings.Index(msg, "```")
 	j := -1
@@ -79,18 +82,18 @@ func parseMessage(msg string) string {
 		i = strings.Index(msg, "`")
 		type_ = 1
 		if i == -1 {
-			return ""
+			return "", ""
 		}
 
 		j = strings.Index(msg[i+1:], "`")
 		if j < 0 {
-			return ""
+			return "", ""
 		}
 		j += i + 1
 	} else {
 		j = strings.Index(msg[i+1:], "```")
 		if j < 0 {
-			return ""
+			return "", ""
 		}
 		j += i + 1
 	}
@@ -99,7 +102,7 @@ func parseMessage(msg string) string {
 	if type_ == 3 {
 		k := strings.Index(msg[i+1:], "\n")
 		if k == -1 {
-			return ""
+			return "", ""
 		}
 		k += i + 1
 		rawCode = msg[k+1 : j]
@@ -130,7 +133,7 @@ func main() {
 	%s
 	rand.Seed(time.Now().UnixNano())
 	fmt.Println(%s)
-}`, imports, uses, rawCode)
+}`, imports, uses, rawCode), rawCode
 	}
 
 	code := rawCode
@@ -151,7 +154,7 @@ func main() {
 		code = "package main\n" + code
 	}
 
-	return code
+	return code, rawCode
 }
 
 func hasMention(mentions []*discordgo.User, user *discordgo.User) bool {
@@ -177,9 +180,16 @@ func handleHelpCommand(dg *discordgo.Session, m *discordgo.Message) {
 
 func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 	// handle run command
-	code := parseMessage(m.Content)
+	code, rawCode := parseMessage(m.Content)
 	if code == "" {
+		logger.Println(code, rawCode)
 		return
+	}
+
+	if !strings.Contains(m.Content, "```") {
+		logger.Println(m.Author.Username + ": " + rawCode)
+	} else {
+		logger.Println(m.Author.Username + ":\n" + rawCode + "\n")
 	}
 
 	stop := make(chan bool)
@@ -206,7 +216,7 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 				Reference: m.Reference(),
 			})
 		} else {
-			log.Println("unknown error", err)
+			logger.Println("unknown error", err)
 		}
 		return
 	}
@@ -249,14 +259,20 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 		Reference: m.Reference(),
 	})
 	if err != nil {
-		log.Println(err)
+		logger.Println(err)
 	}
 }
 
 func main() {
-	dg, err := discordgo.New("Bot " + TOKEN)
+	logfile, err := os.OpenFile("logs/"+fmt.Sprint(time.Now().Unix())+".txt", os.O_CREATE|os.O_APPEND, os.ModePerm)
 	if err != nil {
 		log.Fatal(err)
+	}
+	defer logfile.Close()
+	logger = log.New(io.MultiWriter(os.Stdout, logfile), "", log.LstdFlags)
+	dg, err := discordgo.New("Bot " + TOKEN)
+	if err != nil {
+		logger.Fatal(err)
 	}
 
 	dg.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -274,10 +290,10 @@ func main() {
 
 	err = dg.Open()
 	if err != nil {
-		log.Fatal(err)
+		logger.Fatal(err)
 	}
 
-	log.Println("Bot now running")
+	logger.Println(dg.State.User.Username + "#" + dg.State.User.Discriminator + " online")
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc
