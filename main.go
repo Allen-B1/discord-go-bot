@@ -169,6 +169,7 @@ func hasMention(mentions []*discordgo.User, user *discordgo.User) bool {
 func handleHelpCommand(dg *discordgo.Session, m *discordgo.Message) {
 	dg.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
 		Title: "!go usage",
+		Color: 0x1ED6D6,
 		Description: "" +
 			"!go `1 + 3 * rand.Intn(10)`\n\n" +
 			"!go ```go\n" +
@@ -178,19 +179,36 @@ func handleHelpCommand(dg *discordgo.Session, m *discordgo.Message) {
 	})
 }
 
+func getEmoji(dg *discordgo.Session, guildId string, emojiName string) string {
+	emojis, err := dg.GuildEmojis(guildId)
+	if err != nil {
+		log.Println(err)
+		return ""
+	}
+
+	for _, emoji := range emojis {
+		if emoji.Name == emojiName {
+			return emoji.APIName()
+		}
+	}
+	return ""
+}
+
 func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 	// handle run command
 	code, rawCode := parseMessage(m.Content)
 	if code == "" {
-		logger.Println(code, rawCode)
 		return
 	}
 
 	if !strings.Contains(m.Content, "```") {
-		logger.Println(m.Author.Username + ": " + rawCode)
+		logger.Println("msg " + m.Author.Username + ": " + rawCode)
 	} else {
-		logger.Println(m.Author.Username + ":\n" + rawCode + "\n")
+		logger.Println("msg " + m.Author.Username + ":\n" + rawCode + "\n")
 	}
+
+	// get
+	err := dg.MessageReactionAdd(m.ChannelID, m.ID, getEmoji(dg, m.GuildID, "gopher"))
 
 	stop := make(chan bool)
 	go func() {
