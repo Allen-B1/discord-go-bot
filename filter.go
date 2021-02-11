@@ -180,6 +180,8 @@ var packages = [][3]string{
 	{"io", "Copy"},
 	{"io/ioutil", "ReadAll"},
 	{"os", "Exit"},
+	{"net/http", "Get"},
+	{"math", "Round"},
 	{"math/big", "NewInt"},
 	{"math/rand", "Int"},
 	{"time", "Now"},

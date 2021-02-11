@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -101,7 +103,24 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 	// handle run command
 	code, rawCode := parseMessage(m.Content)
 	if code == "" {
-		return
+		i := strings.Index(m.Content, "http://")
+		if i == -1 {
+			i = strings.Index(m.Content, "https://")
+		}
+		if i == -1 {
+			return
+		}
+		resp, err := http.Get(strings.TrimSpace(m.Content[i:]))
+		if err != nil {
+			logger.Println("msg " + m.Author.Username + ": " + "web fail " + m.Content[i:])
+		}
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			logger.Println("msg " + m.Author.Username + ": " + "web fail " + m.Content[i:])
+		}
+		logger.Println("msg " + m.Author.Username + ": " + "web " + m.Content[i:])
+		rawCode = string(body)
+		code = codeFilter(rawCode, 3)
 	}
 
 	if !strings.Contains(m.Content, "```") {
@@ -112,6 +131,9 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 
 	// add reaction
 	err := dg.MessageReactionAdd(m.ChannelID, m.ID, getEmoji(dg, m.GuildID, "gopher"))
+	if err != nil {
+		logger.Println("error " + err.Error())
+	}
 
 	// set typing indicator
 	stop := make(chan bool)
