@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"os"
-	"path"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -17,60 +18,6 @@ import (
 )
 
 var logger *log.Logger
-
-var packages = [][3]string{
-	{"archive/tar", "NewReader"},
-	{"archive/zip", "NewReader"},
-	{"bufio", "NewReader"},
-	{"bytes", "Contains"},
-	{"compress/bzip2", "NewReader"},
-	{"compress/flate", "NewReader"},
-	{"compress/gzip", "NewReader"},
-	{"compress/lzw", "NewReader"},
-	{"compress/zlib", "NewReader"},
-	{"container/heap", "Init"},
-	{"container/ring", "New"},
-	{"container/list", "New"},
-	{"context", "WithCancel"},
-	{"crypto/aes", "NewCipher"},
-	{"crypto/cipher", "NewGCM"},
-	{"crypto/des", "NewCipher"},
-	{"crypto/dsa", "Verify"},
-	{"crypto/ecdsa", "Verify"},
-	{"crypto/ed25519", "Verify"},
-	{"crypto/elliptic", "GenerateKey"},
-	{"crypto/hmac", "New"},
-	{"crypto/md5", "New"},
-	{"crypto/rand", "Int", "crand"},
-	{"crypto/rc4", "NewCipher"},
-	{"crypto/rsa", "GenerateKey"},
-	{"crypto/sha1", "New"},
-	{"crypto/sha256", "New"},
-	{"crypto/sha512", "New"},
-	{"crypto/subtle", "ConstantTimeSelect"},
-	{"crypto/tls", "NewListener"},
-	{"crypto/x509", "NewCertPool"},
-	{"encoding/ascii85", "NewEncoder"},
-	{"encoding/asn1", "Marshal"},
-	{"encoding/base32", "NewEncoder"},
-	{"encoding/base64", "NewEncoder"},
-	{"encoding/binary", "Size"},
-	{"encoding/csv", "NewReader"},
-	{"encoding/gob", "NewEncoder"},
-	{"encoding/hex", "Encode"},
-	{"encoding/json", "Marshal"},
-	{"encoding/pem", "Encode"},
-	{"encoding/xml", "Marshal"},
-	{"errors", "New"},
-	{"expvar", "Do"},
-	{"flag", "Int"},
-	{"fmt", "Println"},
-	{"os", "Exit"},
-	{"math/big", "NewInt"},
-	{"math/rand", "Int"},
-	{"time", "Now"},
-	{"strings", "Contains"},
-}
 
 var TOKEN = os.Getenv("TOKEN")
 
@@ -110,51 +57,7 @@ func parseMessage(msg string) (string, string) {
 		rawCode = msg[i+1 : j]
 	}
 
-	imports := ""
-	uses := ""
-	for _, pkg := range packages {
-		if pkg[2] != "" {
-			imports += pkg[2] + " \"" + pkg[0] + "\";"
-			uses += "_ = " + pkg[2] + "." + pkg[1] + ";"
-		} else {
-			imports += "\"" + pkg[0] + "\";"
-			uses += "_ = " + path.Base(pkg[0]) + "." + pkg[1] + ";"
-		}
-	}
-
-	if type_ == 1 {
-		return fmt.Sprintf(`package main
-
-import (
-	%s
-)
-
-func main() {
-	%s
-	rand.Seed(time.Now().UnixNano())
-	fmt.Println(%s)
-}`, imports, uses, rawCode), rawCode
-	}
-
-	code := rawCode
-	if strings.Index(rawCode, "func main") == -1 {
-		code = fmt.Sprintf(`package main
-
-import (
-	%s
-)
-
-func main() {
-	%s
-	rand.Seed(time.Now().UnixNano())
-	%s
-}`, imports, uses, rawCode)
-	}
-	if strings.Index(code, "package") == -1 {
-		code = "package main\n" + code
-	}
-
-	return code, rawCode
+	return codeFilter(rawCode, type_), rawCode
 }
 
 func hasMention(mentions []*discordgo.User, user *discordgo.User) bool {
@@ -207,9 +110,10 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 		logger.Println("msg " + m.Author.Username + ":\n" + rawCode + "\n")
 	}
 
-	// get
+	// add reaction
 	err := dg.MessageReactionAdd(m.ChannelID, m.ID, getEmoji(dg, m.GuildID, "gopher"))
 
+	// set typing indicator
 	stop := make(chan bool)
 	go func() {
 		for {
@@ -238,11 +142,14 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 		}
 		return
 	}
+
+	// combine stdout/stderr
 	texts := make(map[string]string)
 	for _, item := range o.output {
 		texts[item[0]] += item[1]
 	}
 
+	// truncate stdout/stderr
 	ellipses := make(map[string]string)
 	for key, _ := range texts {
 		texts[key] = strings.Replace(texts[key], "```", "`\u200b`\u200b`", -1)
@@ -252,9 +159,67 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 		}
 	}
 
-	color := 0xDF9F1F
-	if o.code == 0 {
-		color = 0x5FDF1F
+	getLast := func(arr []string) string {
+		if len(arr) == 0 {
+			return ""
+		}
+		return arr[len(arr)-1]
+	}
+
+	color := 0x1ED6D6
+	if colorStr := getLast(o.info["embed_color"]); colorStr != "" {
+		color64, _ := strconv.ParseInt(colorStr, 16, 64)
+		color = int(color64)
+	}
+
+	desc := getLast(o.info["embed_description"])
+	title := getLast(o.info["embed_title"])
+	titleUrl := getLast(o.info["embed_url"])
+	timestamp := getLast(o.info["embed_timestamp"])
+
+	footer := (*discordgo.MessageEmbedFooter)(nil)
+	if footerFields := strings.Split(getLast(o.info["embed_footer"]), "\u200b"); len(footerFields) > 1 {
+		footerText, footerIcon := footerFields[0], footerFields[1]
+		footer = &discordgo.MessageEmbedFooter{
+			Text:    footerText,
+			IconURL: footerIcon,
+		}
+	}
+
+	image := (*discordgo.MessageEmbedImage)(nil)
+	if imageFields := strings.Split(getLast(o.info["embed_image"]), "\u200b"); len(imageFields) > 2 {
+		width, _ := strconv.Atoi(imageFields[1])
+		height, _ := strconv.Atoi(imageFields[2])
+		image = &discordgo.MessageEmbedImage{URL: imageFields[0], Width: width, Height: height}
+	}
+	thumbnail := (*discordgo.MessageEmbedThumbnail)(nil)
+	if imageFields := strings.Split(getLast(o.info["embed_thumbnail"]), "\u200b"); len(imageFields) > 2 {
+		width, _ := strconv.Atoi(imageFields[1])
+		height, _ := strconv.Atoi(imageFields[2])
+		thumbnail = &discordgo.MessageEmbedThumbnail{URL: imageFields[0], Width: width, Height: height}
+	}
+	video := (*discordgo.MessageEmbedVideo)(nil)
+	if imageFields := strings.Split(getLast(o.info["embed_video"]), "\u200b"); len(imageFields) > 2 {
+		width, _ := strconv.Atoi(imageFields[1])
+		height, _ := strconv.Atoi(imageFields[2])
+		video = &discordgo.MessageEmbedVideo{URL: imageFields[0], Width: width, Height: height}
+	}
+
+	provider := (*discordgo.MessageEmbedProvider)(nil)
+	if providerFields := strings.Split(getLast(o.info["embed_provider"]), "\u200b"); len(providerFields) > 1 {
+		provider = &discordgo.MessageEmbedProvider{
+			Name: providerFields[0],
+			URL:  providerFields[1],
+		}
+	}
+
+	author := (*discordgo.MessageEmbedAuthor)(nil)
+	if authorFields := strings.Split(getLast(o.info["embed_author"]), "\u200b"); len(authorFields) > 2 {
+		author = &discordgo.MessageEmbedAuthor{
+			Name:    authorFields[0],
+			URL:     authorFields[1],
+			IconURL: authorFields[2],
+		}
 	}
 
 	fields := []*discordgo.MessageEmbedField{}
@@ -265,14 +230,29 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 		fields = append(fields, &discordgo.MessageEmbedField{Name: "Stderr", Value: "```\n" + texts["stderr"] + "```" + ellipses["stderr"], Inline: texts["stdout"] != ""})
 	}
 
-	if o.code != 0 || (texts["stderr"] == "" && texts["stdout"] == "") {
+	for _, field := range o.info["embed_field"] {
+		splits := strings.Split(field, "\u200b")
+		title := splits[0]
+		inline := splits[1] == "true"
+		text := strings.Join(splits[2:], "\u200b")
+		fields = append(fields, &discordgo.MessageEmbedField{Name: title, Inline: inline, Value: text})
+	}
+
+	if o.code != 0 || (texts["stderr"] == "" && texts["stdout"] == "" && desc == "") {
 		fields = append(fields, &discordgo.MessageEmbedField{Name: "Exit Code", Value: fmt.Sprint(o.code), Inline: true})
 	}
 
 	_, err = dg.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
 		Embed: &discordgo.MessageEmbed{
-			Fields: fields,
-			Color:  color,
+			Fields:      fields,
+			Description: desc,
+			Title:       title,
+			URL:         titleUrl,
+			Color:       color,
+			Timestamp:   timestamp,
+			Footer:      footer,
+			Image:       image, Thumbnail: thumbnail, Video: video,
+			Provider: provider, Author: author,
 		},
 		Reference: m.Reference(),
 	})
@@ -282,6 +262,8 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 }
 
 func main() {
+	rand.Seed(time.Now().UnixNano())
+
 	logfile, err := os.OpenFile("logs/"+fmt.Sprint(time.Now().Unix())+".txt", os.O_CREATE|os.O_APPEND, os.ModePerm)
 	if err != nil {
 		log.Fatal(err)

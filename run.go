@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -14,6 +15,7 @@ type Output struct {
 	// [type, msg]
 	output [][2]string
 	code   int
+	info   map[string][]string
 }
 
 func runCode(code string) (*Output, error) {
@@ -36,7 +38,7 @@ func runCode(code string) (*Output, error) {
 	}
 
 	cmd := exec.Command(exePath)
-	cmd.Env = []string{"TOKEN=nicetrybud", "OS=" + runtime.GOOS}
+	cmd.Env = []string{"TOKEN=nicetrybud", "GODISC_INSTANCE_ID=" + id}
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -81,5 +83,25 @@ func runCode(code string) (*Output, error) {
 		return nil, err
 	}
 
-	return &Output{messages, ecode}, nil
+	info := make(map[string][]string)
+	rawInfoBytes, err := ioutil.ReadFile("./tmp/info-" + id + ".txt")
+	if err == nil {
+		rawInfo := string(rawInfoBytes)
+		lines := strings.Split(rawInfo, "\n")
+		for _, line := range lines {
+			if len(line) == 0 {
+				continue
+			}
+			i := strings.Index(line, "=")
+			if i == -1 {
+				logger.Println("warning: invalid line in info file", line)
+				continue
+			}
+			key := line[:i]
+			val := line[i+1:]
+			info[key] = append(info[key], val)
+		}
+	}
+
+	return &Output{messages, ecode, info}, nil
 }
