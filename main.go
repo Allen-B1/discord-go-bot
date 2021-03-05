@@ -23,6 +23,8 @@ var logger *log.Logger
 
 var TOKEN = os.Getenv("TOKEN")
 
+var store *Store
+
 func parseMessage(msg string) (string, string) {
 	type_ := 3
 	i := strings.Index(msg, "```")
@@ -71,6 +73,13 @@ func hasMention(mentions []*discordgo.User, user *discordgo.User) bool {
 	return false
 }
 
+func sendErrorMessage(dg *discordgo.Session, channelID string, message string) {
+	dg.ChannelMessageSendEmbed(channelID, &discordgo.MessageEmbed{
+		Color:       0xf22b24,
+		Description: message,
+	})
+}
+
 func handleHelpCommand(dg *discordgo.Session, m *discordgo.Message) {
 	dg.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
 		Title: "!go usage",
@@ -80,7 +89,64 @@ func handleHelpCommand(dg *discordgo.Session, m *discordgo.Message) {
 			"!go ```go\n" +
 			"fmt.Println(\"code here\")\n" +
 			"os.Exit(1)\n" +
-			"```",
+			"```\u200b",
+		Fields: []*discordgo.MessageEmbedField{
+			&discordgo.MessageEmbedField{Name: "Scripts", Value: "!gosave scriptname https://gist.github.com/link/to/raw/script.gobot\n!go scriptname"},
+		},
+	})
+}
+
+func handleSaveCommand(dg *discordgo.Session, m *discordgo.Message) {
+	fields := strings.Fields(m.Content)
+	if len(fields) < 2 {
+		handleHelpCommand(dg, m)
+		return
+	}
+	if len(fields) < 3 {
+		// Remove script
+		scriptName := fields[1]
+		scriptURL := store.GetScript(m.GuildID, scriptName)
+
+		if scriptURL == "" {
+			sendErrorMessage(dg, m.ChannelID, "'"+scriptName+"' is not a saved script")
+			return
+		}
+
+		dg.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+			Title:       "Scripts",
+			Color:       0x1ED6D6,
+			Description: "__" + scriptName + "__'s source is " + scriptURL,
+		})
+		return
+	}
+
+	scriptName := fields[1]
+	scriptURL := strings.Join(fields[2:], " ")
+	if scriptURL == "remove" {
+		store.RemoveScript(m.GuildID, scriptName)
+
+		dg.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+			Title:       "Scripts",
+			Color:       0x1ED6D6,
+			Description: "Removed __" + scriptName + "__",
+		})
+		return
+	}
+
+	i := strings.Index(m.Content, "http://")
+	if i == -1 {
+		i = strings.Index(m.Content, "https://")
+	}
+	if i == -1 {
+		sendErrorMessage(dg, m.ChannelID, "'"+scriptURL+"' is an invalid URL")
+		return
+	}
+
+	store.SetScript(m.GuildID, scriptName, scriptURL)
+	dg.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+		Title:       "Scripts",
+		Color:       0x1ED6D6,
+		Description: "Saved __" + scriptName + "__ as " + scriptURL,
 	})
 }
 
@@ -107,18 +173,39 @@ func handleRunCommand(dg *discordgo.Session, m *discordgo.Message) {
 		if i == -1 {
 			i = strings.Index(m.Content, "https://")
 		}
+		url_ := ""
 		if i == -1 {
-			return
+			if !strings.HasPrefix(m.Content, "!go") {
+				return
+			}
+			scriptName := strings.TrimSpace(m.Content[3:])
+
+			if scriptName == "" {
+				handleHelpCommand(dg, m)
+				return
+			}
+
+			url_ = store.GetScript(m.GuildID, scriptName)
+			if url_ == "" {
+				sendErrorMessage(dg, m.ChannelID, "'"+scriptName+"' is not a saved script")
+				return
+			}
+		} else {
+			url_ = m.Content[i:]
 		}
-		resp, err := http.Get(strings.TrimSpace(m.Content[i:]))
+		resp, err := http.Get(strings.TrimSpace(url_))
 		if err != nil {
-			logger.Println("msg " + m.Author.Username + ": " + "web fail " + m.Content[i:])
+			logger.Println("msg " + m.Author.Username + ": " + "web fail " + url_)
+			sendErrorMessage(dg, m.ChannelID, "Couldn't run the script")
+			return
 		}
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			logger.Println("msg " + m.Author.Username + ": " + "web fail " + m.Content[i:])
+			logger.Println("msg " + m.Author.Username + ": " + "web fail " + url_)
+			sendErrorMessage(dg, m.ChannelID, "Couldn't run the script")
+			return
 		}
-		logger.Println("msg " + m.Author.Username + ": " + "web " + m.Content[i:])
+		logger.Println("msg " + m.Author.Username + ": " + "web " + url_)
 		rawCode = string(body)
 		code = codeFilter(rawCode, 3)
 	}
@@ -297,12 +384,20 @@ func main() {
 		logger.Fatal(err)
 	}
 
+	store = NewStore()
+
 	dg.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if m.Author.ID != s.State.User.ID {
 			if strings.HasPrefix(m.Content, "!go") || hasMention(m.Mentions, dg.State.User) {
 				if strings.HasPrefix(m.Content, "!gohelp") || (hasMention(m.Mentions, dg.State.User) && !strings.Contains(m.Content, "`")) {
 					// handle help command
 					handleHelpCommand(dg, m.Message)
+					return
+				}
+
+				if strings.HasPrefix(m.Content, "!gosave") {
+					handleSaveCommand(dg, m.Message)
+					return
 				}
 
 				handleRunCommand(dg, m.Message)
